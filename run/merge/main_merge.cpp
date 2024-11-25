@@ -39,6 +39,7 @@ int main(int argc, char** argv){
     MODE mode = COPY_ON_WRITE;
     bool writeSize = false;
     int append = 0;
+    int read_threshold = 40;
 
     if(argc < 2){
         usage();
@@ -73,6 +74,10 @@ int main(int argc, char** argv){
                 append = atoi(argv[i+1]);
                 i++;
             }
+            else if(strcmp(argv[i], "-thres") == 0){
+                read_threshold = atoi(argv[i+1]);
+                i++;
+            }
             else if(strcmp(argv[i], "-writesize") == 0){
                 writeSize = true;
             }
@@ -95,7 +100,7 @@ int main(int argc, char** argv){
 
     cout << "Create tree <" << tree_file << ">" << endl;
     mylog << "Create tree <" << tree_file << ">" << endl;
-    t = new BTree<TYPE>(tree_file, degree, mode, append);
+    t = new BTree<TYPE>(tree_file, degree, mode, append, read_threshold);
 
     t->stat();
 

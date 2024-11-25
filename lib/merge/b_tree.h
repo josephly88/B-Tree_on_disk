@@ -16,6 +16,8 @@ using namespace std;
 #define FATAL do { fprintf(stderr, "Error at line %d, file %s (%d) [%s]\n", \
   __LINE__, __FILE__, errno, strerror(errno)); exit(1); } while(0)
 
+#define RD_COUNTER 10
+
 typedef enum {
     COPY_ON_WRITE, 
     REAL_CMB, 
@@ -77,7 +79,7 @@ class BTree{
 	public:
 	    CMB<T>* cmb;
 
-		BTree(char* filename, int degree, MODE _mode, int append);
+		BTree(char* filename, int degree, MODE _mode, int append, int read_threshold);
 		~BTree();
 
 		void stat();
@@ -157,6 +159,7 @@ class CMB{
 
 	public:
         int MAX_NUM_IU;
+        int read_threshold;
         node_LRU* nodeLRU;
 
 		CMB(MODE _mode);
@@ -291,7 +294,7 @@ class IU_LIST{
 };
 
 template <typename T>
-BTree<T>::BTree(char* filename, int degree, MODE _mode, int append){
+BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_threshold){
     mylog << "BTree()" << endl;
 
     if(degree > (int)((PAGE_SIZE - sizeof(BTreeNode<T>) - sizeof(u_int64_t)) / (sizeof(u_int64_t) + sizeof(T))) ){
@@ -331,6 +334,7 @@ BTree<T>::BTree(char* filename, int degree, MODE _mode, int append){
         if(append > 0){
             cmb->nodeLRU = new node_LRU;
             cmb->MAX_NUM_IU = append;
+            cmb->read_threshold = read_threshold;
 
             cmb->update_num_iu(0);
             cmb->set_clear_ptr(0);
@@ -2432,7 +2436,7 @@ u_int64_t CMB<T>::search_entry(u_int64_t node_id, u_int64_t _k, BTree<T>* t, rem
     u_int64_t cur_iu_id = get_iu_ptr(node_id);
     int counter = 0;
     while(cur_iu_id){
-        if(counter >= 30){
+        if(counter >= read_threshold){
             BTreeNode<T>* node = new BTreeNode<T>(0,0,0);
             t->node_read(node_id, node);
             u_int64_t old_block_id = get_block_id(node_id);
