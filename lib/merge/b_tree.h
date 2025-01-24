@@ -16,8 +16,6 @@ using namespace std;
 #define FATAL do { fprintf(stderr, "Error at line %d, file %s (%d) [%s]\n", \
   __LINE__, __FILE__, errno, strerror(errno)); exit(1); } while(0)
 
-#define RD_COUNTER 10
-
 typedef enum {
     COPY_ON_WRITE, 
     REAL_CMB, 
@@ -364,6 +362,7 @@ void BTree<T>::stat(){
     cout << "Root Block ID: " << root_id << endl;
     if(cmb && cmb->nodeLRU){
         cout << "Maximum number of IU: " << cmb->MAX_NUM_IU << endl;
+        cout << "Read Threshold: " << cmb->read_threshold << endl;
     }
     cout << endl;
 
@@ -433,7 +432,7 @@ void BTree<T>::node_read(u_int64_t node_id, BTreeNode<T>* node){
     if(node_id == 0){
         cout << " error : attempt to read node id = 0 " << endl;
         mylog << " error : attempt to read node id = 0 " << endl;
-        return;
+        exit(1);
     }
 
     delete [] node->key;
@@ -449,7 +448,7 @@ void BTree<T>::node_read(u_int64_t node_id, BTreeNode<T>* node){
     if(block_id < 2){
         cout << " error : attempt to read block id = " << block_id << endl;
         mylog << " error : attempt to read block id = " << block_id << endl;
-        return;
+        exit(1);
     }    
 
     char* buf;
@@ -488,7 +487,7 @@ void BTree<T>::node_write(u_int64_t node_id, BTreeNode<T>* node){
     if(node_id == 0){
         cout << " Error : Attempt to write node id = 0 " << endl;
         mylog << " Error : Attempt to write node id = 0 " << endl;
-        return;
+        exit(1);
     }
 
     u_int64_t block_id;
@@ -500,7 +499,7 @@ void BTree<T>::node_write(u_int64_t node_id, BTreeNode<T>* node){
     if(block_id < 2){
         cout << " error : attempt to write block id = " << block_id << endl;
         mylog << " error : attempt to write block id = " << block_id << endl;
-        return;
+        exit(1);
     }
 
     char* buf;
@@ -531,7 +530,6 @@ void BTree<T>::node_write(u_int64_t node_id, BTreeNode<T>* node){
 
 template <typename T>
 u_int64_t BTree<T>::get_free_block_id(){
-    mylog << "get_free_block_id()" << endl;
 
     char* buf;
     posix_memalign((void**)&buf, PAGE_SIZE, PAGE_SIZE);
@@ -545,6 +543,7 @@ u_int64_t BTree<T>::get_free_block_id(){
             if( !(byte & 1) ){
                 free(buf);
                 set_block_id(id, true);
+                mylog << "get_free_block_id(): " << id << endl;
                 return id;
             }
             byte >>= 1;
@@ -553,7 +552,8 @@ u_int64_t BTree<T>::get_free_block_id(){
         byte_ptr++;
     }
     free(buf);
-    return 0;
+    mylog << " error: get_free_block_id() failed " << endl;
+    exit(1);
 }
 
 template <typename T>
@@ -701,6 +701,8 @@ void BTree<T>::update(u_int64_t _k, T _v){
             tree_write(fd, this);
         }
 
+        delete root;
+
         if(rmlist){
             removeList* cur = rmlist;
             removeList* next = NULL;
@@ -711,7 +713,6 @@ void BTree<T>::update(u_int64_t _k, T _v){
                 cur = next;
             }
         }
-        delete root;
     }
 }
 
@@ -781,6 +782,7 @@ void BTree<T>::insertion(u_int64_t _k, T _v){
         delete root;
     }
     else{
+        // Create New Root for the first time
         if(cmb){
             root_id = cmb->get_new_node_id();
             if(cmb->nodeLRU)
@@ -2202,6 +2204,7 @@ void CMB<T>::push_iu_id(u_int64_t iu_id){
     u_int64_t free_iu_stack_id = get_free_iu_stack_id();
     iu_update_next_iu_id(iu_id, free_iu_stack_id);
     update_free_iu_stack_id(iu_id);
+    mylog << "push_iu_id() - " << iu_id << endl;
 }
 
 template <typename T>
@@ -2341,10 +2344,12 @@ bool CMB<T>::full(){
 
 template <typename T>
 void CMB<T>::reduction_create_iu_list(u_int64_t node_id, IU_LIST** iu_stack){
+    mylog << "reduction_create_iu_list() - ";
 
     u_int64_t cur_iu_id = get_iu_ptr(node_id);
     IU_LIST* last_iu_list = NULL;
     while(cur_iu_id){
+        mylog << cur_iu_id << "-";
         IU_LIST* new_iu_entry = new IU_LIST;
         new_iu_entry->iu_id = cur_iu_id;
         new_iu_entry->next = last_iu_list;
@@ -2354,6 +2359,8 @@ void CMB<T>::reduction_create_iu_list(u_int64_t node_id, IU_LIST** iu_stack){
         last_iu_list = new_iu_entry;
         cur_iu_id = iu_get_next_iu_id(cur_iu_id);
     }
+    
+    mylog << endl;
 }
 
 template <typename T>
@@ -2668,6 +2675,5 @@ u_int64_t node_LRU::pop(){
 
     return ret;
 }
-
 
 #endif /* B_TREE_H */
