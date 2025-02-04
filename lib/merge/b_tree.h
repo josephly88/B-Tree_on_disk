@@ -666,6 +666,17 @@ void BTree<T>::search(u_int64_t _k, T* buf){
         node_read(root_id, root);
         root->search(this, _k, buf, &rmlist);
         delete root;
+
+        if(rmlist){
+            removeList* cur = rmlist;
+            removeList* next = NULL;
+            while(cur != NULL){
+                next = cur->next;
+                set_block_id(cur->id, false);
+                delete cur;
+                cur = next;
+            }
+        }
     }
     else
         buf = NULL;
@@ -679,29 +690,33 @@ void BTree<T>::update(u_int64_t _k, T _v){
 
         removeList* rmlist = NULL;
 
+        bool append_path = false;
         if(cmb && cmb->nodeLRU){
             u_int64_t getIsLeaf = cmb->get_is_leaf(root_id);
             if(getIsLeaf == 1){
-                cmb->append(this, root_id, U, _k, _v, &rmlist);
-                return;
+                append_path = true;
             }
         }
 
-        BTreeNode<T>* root = new BTreeNode<T>(0, 0, 0);
-        node_read(root_id, root);
-        int dup_node_id = root->update(this, _k, _v, &rmlist);
+        if(append_path){
+            cmb->append(this, root_id, U, _k, _v, &rmlist);
+        }
+        else{
+            BTreeNode<T>* root = new BTreeNode<T>(0, 0, 0);
+            node_read(root_id, root);
+            int dup_node_id = root->update(this, _k, _v, &rmlist);
 
-        if(dup_node_id == 0){
+            if(dup_node_id == 0){
+                delete root;
+                return;
+            }
+
+            if(dup_node_id != root_id){
+                root_id = dup_node_id;
+                tree_write(fd, this);
+            }
             delete root;
-            return;
         }
-
-        if(dup_node_id != root_id){
-            root_id = dup_node_id;
-            tree_write(fd, this);
-        }
-
-        delete root;
 
         if(rmlist){
             removeList* cur = rmlist;
