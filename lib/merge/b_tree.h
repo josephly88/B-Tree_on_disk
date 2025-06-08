@@ -77,7 +77,7 @@ class BTree{
 	public:
 	    CMB<T>* cmb;
 
-		BTree(char* filename, int degree, MODE _mode, int append, int read_threshold);
+		BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU);
 		~BTree();
 
 		void stat();
@@ -267,6 +267,7 @@ class node_LRU{
         LRU_list_entry* list_pool;
         u_int64_t head; 
         u_int64_t tail;
+        bool LRU;
 
         node_LRU();
         ~node_LRU();
@@ -292,7 +293,7 @@ class IU_LIST{
 };
 
 template <typename T>
-BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_threshold){
+BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU){
     mylog << "BTree()" << endl;
 
     if(degree > (int)((PAGE_SIZE - sizeof(BTreeNode<T>) - sizeof(u_int64_t)) / (sizeof(u_int64_t) + sizeof(T))) ){
@@ -331,6 +332,7 @@ BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_thr
         cmb->nodeLRU = NULL;
         if(append > 0){
             cmb->nodeLRU = new node_LRU;
+            cmb->nodeLRU->LRU = LRU;
             cmb->MAX_NUM_IU = append;
             cmb->read_threshold = read_threshold;
 
@@ -2675,18 +2677,36 @@ u_int64_t node_LRU::pop(){
     if(head == 0 && tail == 0)
         return 0;
 
-    u_int64_t ret = head;
-    if(head == tail){
-        head = 0;
-        tail = 0;
+    u_int64_t ret;
+    if(LRU){
+        ret = head;
+        if(head == tail){
+            head = 0;
+            tail = 0;
+        }
+        else{
+            head = list_pool[head].next;
+            list_pool[head].last = 0;
+        }
+
+        list_pool[ret].last = 0;
+        list_pool[ret].next = 0;
     }
     else{
-        head = list_pool[head].next;
-        list_pool[head].last = 0;
-    }
+        ret = tail;
+        
+        if(head == tail){
+            head = 0;
+            tail = 0;
+        }
+        else{
+            tail = list_pool[tail].last;
+            list_pool[tail].next = 0;
+        }
 
-    list_pool[ret].last = 0;
-    list_pool[ret].next = 0;
+        list_pool[ret].last = 0;
+        list_pool[ret].next = 0;
+    }
 
     return ret;
 }
