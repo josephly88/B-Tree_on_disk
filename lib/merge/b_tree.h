@@ -37,6 +37,7 @@ typedef enum {
 ofstream mylog;
 
 bool needsplit;
+bool hb_block;
 
 // Evaluation Break Down
 chrono::duration<double, micro> flash_diff;
@@ -62,6 +63,10 @@ class LRU_list_entry;
 class node_LRU;
 class APPEND_ENTRY;
 class IU_LIST;
+// HBTree
+class HB_LRU_list_entry;
+class HB_LRU;
+
 
 template <typename T>
 class BTree{
@@ -77,7 +82,7 @@ class BTree{
 	public:
 	    CMB<T>* cmb;
 
-		BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU);
+		BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU, int HB);
 		~BTree();
 
 		void stat();
@@ -101,6 +106,8 @@ class BTree{
         void update(u_int64_t _k, T _v);
 		void deletion(u_int64_t _k);	
 
+        // HBTree
+        void hb_force_merge(u_int64_t _k, u_int64_t cmb_id);
 };
 
 template <typename T>
@@ -132,11 +139,14 @@ class BTreeNode{
 		u_int64_t direct_insert(BTree<T>* t, u_int64_t _k, T _v, removeList** list, u_int64_t node_id1 = 0, u_int64_t node_id2 = 0);
 		u_int64_t split(BTree<T>* t, u_int64_t node_id, u_int64_t parent_id, removeList** list);
 
-		u_int64_t traverse_delete(BTree<T>* t, u_int64_t _k, removeList** _list);
-		u_int64_t direct_delete(BTree<T>* t, u_int64_t _k, removeList** _list);
-		u_int64_t rebalance(BTree<T>* t, int idx, removeList** _list);
+		u_int64_t traverse_delete(BTree<T>* t, u_int64_t _k, removeList** list);
+		u_int64_t direct_delete(BTree<T>* t, u_int64_t _k, removeList** list);
+		u_int64_t rebalance(BTree<T>* t, int idx, removeList** list);
 		u_int64_t get_pred(BTree<T>* t);
 		u_int64_t get_succ(BTree<T>* t);	
+
+        // HBTree
+        u_int64_t hb_force_merge(BTree<T>* t, u_int64_t _k, u_int64_t cmb_id, removeList** list);
 };
 
 class removeList{
@@ -159,6 +169,8 @@ class CMB{
         int MAX_NUM_IU;
         int read_threshold;
         node_LRU* nodeLRU;
+        HB_LRU* hbLRU; 
+        int opt;
 
 		CMB(MODE _mode);
 		~CMB();
@@ -235,6 +247,24 @@ class CMB{
 
         u_int64_t iu_get_val_next(u_int64_t val_id);
         void iu_update_val_next(u_int64_t val_id, u_int64_t next);
+
+        // HBTree
+        bool hb_precheck(u_int64_t node_id);
+        void hb_load(BTreeNode<T>* node, u_int64_t cmb_id);
+        void hb_store(u_int64_t cmb_id, BTreeNode<T>* node);
+
+        u_int64_t hb_kvp_search(u_int64_t cmb_id, u_int64_t _k);
+        void hb_insert(u_int64_t cmb_id, u_int64_t _k, T _v);
+        void hb_update(u_int64_t cmb_id, u_int64_t _k, T _v);
+        T hb_search(u_int64_t cmb_id, u_int64_t _k);
+        void hb_delete(u_int64_t cmb_id, u_int64_t _k);
+
+        void hb_write_key(u_int64_t cmb_id, u_int64_t idx, u_int64_t _k);
+        u_int64_t hb_read_key(u_int64_t cmb_id, u_int64_t idx);
+        void hb_write_value(u_int64_t cmb_id, u_int64_t idx, T _v);
+        T hb_read_value(u_int64_t cmb_id, u_int64_t idx);
+        void hb_write_num_key(u_int64_t cmb_id, u_int64_t num_key);        
+        u_int64_t hb_read_num_key(u_int64_t cmb_id);        
 };
 
 class meta_BKMap{
@@ -292,8 +322,35 @@ class IU_LIST{
         IU_LIST* next;
 };
 
+class HB_LRU_list_entry{
+    public:
+        u_int64_t last;
+        u_int64_t NODE_ID;
+        u_int64_t used;
+        u_int64_t next;
+};
+
+class HB_LRU{
+    public:
+       HB_LRU_list_entry* list_pool; 
+       u_int64_t head;
+       u_int64_t tail;
+       u_int64_t max_num;
+       u_int64_t used;
+    
+       HB_LRU(int NUM);
+       ~HB_LRU();
+
+       bool full();
+       u_int64_t look_up(u_int64_t node_id);
+       void reenqueue(u_int64_t cmb_idx);
+       u_int64_t pop();
+       u_int64_t enqueue(u_int64_t node_id);
+       u_int64_t dequeue(u_int64_t node_id);
+};
+
 template <typename T>
-BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU){
+BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_threshold, bool LRU, int HB){
     mylog << "BTree()" << endl;
 
     if(degree > (int)((PAGE_SIZE - sizeof(BTreeNode<T>) - sizeof(u_int64_t)) / (sizeof(u_int64_t) + sizeof(T))) ){
@@ -327,6 +384,7 @@ BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_thr
         // Map CMB
         cmb = new CMB<T>(mode);    
         cmb->new_node_id_init();
+        cmb->opt = 1;
 
         // Append entry Optimization
         cmb->nodeLRU = NULL;
@@ -342,6 +400,12 @@ BTree<T>::BTree(char* filename, int degree, MODE _mode, int append, int read_thr
             cmb->update_free_iu_id(1);
             cmb->update_free_val_stack_id(0);
             cmb->update_free_val_id(1);
+            cmb->opt = 2;
+        }
+        cmb->hbLRU = NULL;
+        if(HB){
+            cmb->hbLRU = new HB_LRU(HB);
+            cmb->opt = 3;
         }
     }
 
@@ -442,7 +506,7 @@ void BTree<T>::node_read(u_int64_t node_id, BTreeNode<T>* node){
     delete [] node->child_id;
 
     u_int64_t block_id;
-    if(cmb)
+    if(cmb && cmb->opt < 3)
         block_id = cmb->get_block_id(node_id);       
     else
         block_id = node_id;
@@ -493,7 +557,7 @@ void BTree<T>::node_write(u_int64_t node_id, BTreeNode<T>* node){
     }
 
     u_int64_t block_id;
-    if(cmb)
+    if(cmb && cmb->opt < 3)
         block_id = cmb->get_block_id(node_id);
     else
         block_id = node_id;
@@ -648,7 +712,7 @@ void BTree<T>::search(u_int64_t _k, T* buf){
     if(root_id){
         removeList* rmlist = NULL;
 
-        if(cmb && cmb->nodeLRU){
+        if(cmb && cmb->opt == 2){
             u_int64_t getIsLeaf = cmb->get_is_leaf(root_id);
             if(getIsLeaf == 1){
                 u_int64_t iu_id = cmb->search_entry(root_id, _k, this, &rmlist);
@@ -693,7 +757,7 @@ void BTree<T>::update(u_int64_t _k, T _v){
         removeList* rmlist = NULL;
 
         bool append_path = false;
-        if(cmb && cmb->nodeLRU){
+        if(cmb && cmb->opt == 2){
             u_int64_t getIsLeaf = cmb->get_is_leaf(root_id);
             if(getIsLeaf == 1){
                 append_path = true;
@@ -738,6 +802,7 @@ void BTree<T>::insertion(u_int64_t _k, T _v){
     mylog << "insertion() - key:" << _k << endl;
 
     needsplit = false;
+    hb_block = false;
 
     if(root_id){
         removeList* rmlist = NULL;
@@ -762,13 +827,13 @@ void BTree<T>::insertion(u_int64_t _k, T _v){
 
             int new_root_id;     
 
-            if(cmb){
+            if(cmb && cmb->opt < 3){
                 new_root_id = cmb->get_new_node_id();
-                if(cmb->nodeLRU)
+                if(cmb->opt == 2)
                     cmb->update_iu_ptr(new_root_id, 0);  
                 cmb->update_node_id(new_root_id, get_free_block_id());
                 cmb->update_num_kv(new_root_id, 0);
-                if(cmb && cmb->nodeLRU){
+                if(cmb && cmb->opt == 2){
                     cmb->update_is_leaf(new_root_id, 0);
                 }
             }
@@ -800,13 +865,13 @@ void BTree<T>::insertion(u_int64_t _k, T _v){
     }
     else{
         // Create New Root for the first time
-        if(cmb){
+        if(cmb && cmb->opt < 3){
             root_id = cmb->get_new_node_id();
-            if(cmb->nodeLRU)
+            if(cmb->opt == 2)
                 cmb->update_iu_ptr(root_id, 0);
             cmb->update_node_id(root_id, get_free_block_id());
             cmb->update_num_kv(root_id, 0);
-            if(cmb && cmb->nodeLRU){
+            if(cmb && cmb->opt == 2){
                 cmb->update_is_leaf(root_id, 1);
             }
         }
@@ -832,6 +897,7 @@ void BTree<T>::deletion(u_int64_t _k){
 
     if(root_id){
         removeList* rmlist = NULL;
+        hb_block = false;
 
         BTreeNode<T>* root = new BTreeNode<T>(0, 0, 0);
         node_read(root_id, root);
@@ -852,7 +918,7 @@ void BTree<T>::deletion(u_int64_t _k){
             height--;
             cout << endl << "Tree height => " << height << endl;
 
-            if(cmb)
+            if(cmb && cmb->opt < 3)
                 rmlist = new removeList(cmb->get_block_id(root_id), rmlist);
             else
                 rmlist = new removeList(root_id, rmlist);
@@ -879,6 +945,42 @@ void BTree<T>::deletion(u_int64_t _k){
     }
     else
         return;
+}
+
+template <typename T>
+void BTree<T>::hb_force_merge(u_int64_t _k, u_int64_t cmb_id){
+    mylog << "hb_force_merge() - key: " << _k << ", cmb_id: " << cmb_id << endl;
+
+    if(root_id){
+        removeList* rmlist = NULL;
+        
+        if(cmb && cmb->opt == 3){
+            BTreeNode<T>* root = new BTreeNode<T>(0,0,0);
+            node_read(root_id, root);
+            int dup_node_id = root->hb_force_merge(this, _k, cmb_id, &rmlist);
+
+            if(dup_node_id == 0){
+                delete root;
+                return;
+            }
+
+            if(dup_node_id != root_id){
+                root_id = dup_node_id;
+                tree_write(fd, this);
+            }
+            
+            if(rmlist){
+                removeList* cur = rmlist;
+                removeList* next = NULL;
+                while(cur != NULL){
+                    next = cur->next;
+                    set_block_id(cur->id, false);
+                    delete cur;
+                    cur = next;
+                }
+            }
+        }
+    }
 }
 
 template <typename T>
@@ -926,7 +1028,7 @@ void BTreeNode<T>::display_tree(BTree<T>* t, MODE mode, int level){
 
     BTreeNode<T>* node = new BTreeNode<T>(0,0,0);
     t->node_read(node_id, node);
-    if(t->cmb && t->cmb->nodeLRU && is_leaf)
+    if(t->cmb && t->cmb->opt == 2 && is_leaf)
         t->cmb->reduction(node_id, node);
 
     int i = 0;
@@ -955,8 +1057,14 @@ void BTreeNode<T>::inorder_traversal(BTree<T>* t, ofstream &outFile){
     BTreeNode<T>* node = new BTreeNode<T>(0,0,0);
     t->node_read(node_id, node);
 
-    if(t->cmb && t->cmb->nodeLRU && is_leaf){
+    if(t->cmb && t->cmb->opt == 2 && is_leaf){
         t->cmb->reduction(node_id, node);
+    }
+    if(t->cmb && t->cmb->opt == 3 && is_leaf){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            t->cmb->hb_store(cmb_id, node);
+        } 
     }
 
     int i = 0;
@@ -983,6 +1091,29 @@ template <typename T>
 void BTreeNode<T>::search(BTree<T>* t, u_int64_t _k, T* buf, removeList** list){
     mylog << "search() - key:" << _k << endl;
 
+    if(is_leaf && t->cmb && t->cmb->opt == 3){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            t->cmb->hbLRU->reenqueue(cmb_id);
+        } 
+        else{
+            if(t->cmb->hbLRU->full()){
+                u_int64_t cmb_id = t->cmb->hbLRU->pop();
+                u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0);
+                t->hb_force_merge(first_key, cmb_id);
+                t->search(_k, buf);
+                return;
+            }
+            else{
+                cmb_id = t->cmb->hbLRU->enqueue(node_id);
+                t->cmb->hb_load(this, cmb_id);
+            }
+        }
+        T ret_val = t->cmb->hb_search(cmb_id, _k);
+        memcpy(buf, &ret_val, sizeof(T));
+        return;
+    }
+
     int i;
     for(i = 0; i < num_key; i++){
         if(_k == key[i]){
@@ -992,8 +1123,9 @@ void BTreeNode<T>::search(BTree<T>* t, u_int64_t _k, T* buf, removeList** list){
 
             return;
         }
-        if(_k < key[i]){ if(!is_leaf){
-                if(t->cmb && t->cmb->nodeLRU){
+        if(_k < key[i]){ 
+            if(!is_leaf){
+                if(t->cmb && t->cmb->opt == 2){
                     u_int64_t getIsLeaf = t->cmb->get_is_leaf(child_id[i]);
                     if(getIsLeaf == 1){
                         u_int64_t iu_id = t->cmb->search_entry(child_id[i], _k, t, list);
@@ -1022,7 +1154,7 @@ void BTreeNode<T>::search(BTree<T>* t, u_int64_t _k, T* buf, removeList** list){
     }
 
     if(!is_leaf){
-        if(t->cmb && t->cmb->nodeLRU){
+        if(t->cmb && t->cmb->opt == 2){
             u_int64_t getIsLeaf = t->cmb->get_is_leaf(child_id[i]);
             if(getIsLeaf == 1){
                 u_int64_t iu_id = t->cmb->search_entry(child_id[i], _k, t, list);
@@ -1051,17 +1183,39 @@ template <typename T>
 u_int64_t BTreeNode<T>::update(BTree<T>* t, u_int64_t _k, T _v, removeList** list){
     mylog << "update() - key:" << _k << endl;
 
+    if(is_leaf && t->cmb && t->cmb->opt == 3){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            t->cmb->hbLRU->reenqueue(cmb_id);
+        } 
+        else{
+            if(t->cmb->hbLRU->full()){
+                u_int64_t cmb_id = t->cmb->hbLRU->pop();
+                u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0);
+                t->hb_force_merge(first_key, cmb_id);
+                t->update(_k, _v);
+                return 0;
+            }
+            else{
+                cmb_id = t->cmb->hbLRU->enqueue(node_id);
+                t->cmb->hb_load(this, cmb_id);
+            }
+        }
+        t->cmb->hb_update(cmb_id, _k, _v);
+        return node_id;
+    }
+
     int i;
     for(i = 0; i < num_key; i++){
         // Key match
         if(_k == key[i]){
-            if(t->cmb && t->cmb->nodeLRU && is_leaf){
+            if(t->cmb && t->cmb->opt == 2 && is_leaf){
                 t->cmb->append(t, node_id, U, _k, _v, list);
             }
             else{
                 value[i] = _v;
 
-                if(t->cmb){
+                if(t->cmb && !t->cmb->opt == 3){
                     *list = new removeList(t->cmb->get_block_id(node_id), *list);
                     t->cmb->update_node_id(node_id, t->get_free_block_id());
                 }
@@ -1082,7 +1236,7 @@ u_int64_t BTreeNode<T>::update(BTree<T>* t, u_int64_t _k, T _v, removeList** lis
     if(is_leaf)
         return 0; // Not found
     else{
-        if(t->cmb && t->cmb->nodeLRU){
+        if(t->cmb && t->cmb->opt == 2){
             u_int64_t getIsLeaf = t->cmb->get_is_leaf(child_id[i]); 
             if(getIsLeaf == 1){
                 t->cmb->append(t, child_id[i], U, _k, _v, list);
@@ -1149,7 +1303,7 @@ u_int64_t BTreeNode<T>::traverse_insert(BTree<T>* t, u_int64_t _k, T _v, removeL
         if(needsplit){
             node_id = split(t, child_id[i], node_id, list);
         }
-        else if(t->cmb && t->cmb->nodeLRU && child->is_leaf){           
+        else if(t->cmb && t->cmb->opt == 2 && child->is_leaf){           
             if(t->cmb->get_num_kv(child_id[i]) >= m)
                 node_id = split(t, child_id[i], node_id, list);
         }
@@ -1168,7 +1322,39 @@ u_int64_t BTreeNode<T>::direct_insert(BTree<T>* t, u_int64_t _k, T _v, removeLis
 
     mylog << "direct_insert() - key:" << _k << endl;
 
-    if(t->cmb && (t->cmb->nodeLRU && is_leaf)){
+    if(is_leaf && t->cmb && t->cmb->opt == 3 && !hb_block){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            if(t->cmb->hb_read_num_key(cmb_id) >= m-1){
+                t->cmb->hbLRU->dequeue(node_id);
+                t->cmb->hb_store(cmb_id, this);
+            }
+            else{
+                t->cmb->hbLRU->reenqueue(cmb_id);
+                t->cmb->hb_insert(cmb_id, _k, _v);
+                return node_id;
+            }
+        }
+        else{
+            if(num_key < m-1){
+                if(t->cmb->hbLRU->full()){
+                    u_int64_t cmb_id = t->cmb->hbLRU->pop();
+                    u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0);
+                    t->hb_force_merge(first_key, cmb_id);
+                    t->insertion(_k, _v);
+                    return 0;
+                }
+                else{
+                    cmb_id = t->cmb->hbLRU->enqueue(node_id);
+                    t->cmb->hb_load(this, cmb_id);
+                    t->cmb->hb_insert(cmb_id, _k, _v);
+                    return node_id;
+                }
+            }
+        }
+    }
+
+    if(t->cmb && t->cmb->opt == 2 && is_leaf){
         t->cmb->append(t, node_id, I, _k, _v, list);
 
         u_int64_t num_k = t->cmb->get_num_kv(node_id) + 1;
@@ -1201,7 +1387,7 @@ u_int64_t BTreeNode<T>::direct_insert(BTree<T>* t, u_int64_t _k, T _v, removeLis
         num_key++;
         if(num_key >= m) needsplit = true;
 
-        if(t->cmb){
+        if(t->cmb && t->cmb->opt < 3){
             *list = new removeList(t->cmb->get_block_id(node_id), *list);
             t->cmb->update_node_id(node_id, t->get_free_block_id());
             t->cmb->update_num_kv(node_id, num_key);
@@ -1226,7 +1412,7 @@ u_int64_t BTreeNode<T>::split(BTree<T>*t, u_int64_t spt_node_id, u_int64_t paren
     
     BTreeNode<T>* node = new BTreeNode<T>(0, 0, 0);
     t->node_read(spt_node_id, node);
-    if(t->cmb && t->cmb->nodeLRU && node->is_leaf){
+    if(t->cmb && t->cmb->opt == 2 && node->is_leaf){
         t->cmb->reduction(spt_node_id, node);
     }
 
@@ -1234,9 +1420,9 @@ u_int64_t BTreeNode<T>::split(BTree<T>*t, u_int64_t spt_node_id, u_int64_t paren
     t->node_read(parent_id, parent);  
 
     int new_node_id;
-    if(t->cmb){
+    if(t->cmb && t->cmb->opt < 3){
         new_node_id = t->cmb->get_new_node_id();
-        if(t->cmb->nodeLRU)
+        if(t->cmb->opt == 2)
             t->cmb->update_iu_ptr(new_node_id, 0);
         t->cmb->update_node_id(new_node_id, t->get_free_block_id());
     }
@@ -1255,7 +1441,7 @@ u_int64_t BTreeNode<T>::split(BTree<T>*t, u_int64_t spt_node_id, u_int64_t paren
     if(!node->is_leaf)
         new_node->child_id[j] = node->child_id[i];
 
-    if(t->cmb){
+    if(t->cmb && t->cmb->opt < 3){
         *list = new removeList(t->cmb->get_block_id(node->node_id), *list);
         
         t->cmb->update_num_kv(new_node_id, new_node->num_key);
@@ -1263,7 +1449,7 @@ u_int64_t BTreeNode<T>::split(BTree<T>*t, u_int64_t spt_node_id, u_int64_t paren
         t->cmb->update_node_id(node->node_id, t->get_free_block_id());
         t->cmb->update_num_kv(node->node_id, min_num);
         
-        if(t->cmb && t->cmb->nodeLRU){
+        if(t->cmb && t->cmb->opt == 2){
             t->cmb->clear_iu(node->node_id); 
             if(node->is_leaf)
                 t->cmb->update_is_leaf(new_node_id, 1);
@@ -1299,8 +1485,14 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
     int i;
     bool found = false;
 
-    if(t->cmb && t->cmb->nodeLRU && is_leaf){
+    if(t->cmb && t->cmb->opt == 2 && is_leaf){
         t->cmb->reduction(node_id, this);
+    }
+    if(t->cmb && t->cmb->opt == 3 && is_leaf){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            t->cmb->hb_store(cmb_id, this); 
+        }
     }
 
     for(i = 0; i < num_key; i++){
@@ -1326,10 +1518,21 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
             t->node_read(succ_id, succ);
 
             bool borrow_from_succ = false;
-            if(t->cmb && t->cmb->nodeLRU){
+            if(t->cmb && t->cmb->opt == 2){
                 if(t->cmb->get_num_kv(succ_id) > min_num)
                     borrow_from_succ = true;
             }                
+            else if(t->cmb && t->cmb->opt == 3){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(succ_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    if(t->cmb->hb_read_num_key(cmb_id) > min_num)
+                        borrow_from_succ = true;
+                }
+                else{
+                    if(succ->num_key > min_num)
+                        borrow_from_succ = true;
+                }
+            }
             else{
                 if(succ->num_key > min_num)
                     borrow_from_succ = true;
@@ -1337,8 +1540,14 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
 
             if(borrow_from_succ){
                 mylog << "borrow_from_succesor() - node id:" << node->node_id << endl;
-                if(t->cmb && t->cmb->nodeLRU)
+                if(t->cmb && t->cmb->opt == 2)
                     t->cmb->reduction(succ_id, succ);
+                if(t->cmb && t->cmb->opt == 3){
+                    u_int64_t cmb_id = t->cmb->hbLRU->look_up(succ_id);
+                    if(cmb_id < t->cmb->hbLRU->max_num){
+                        t->cmb->hb_store(cmb_id, succ);
+                    } 
+                }
 
                 // Borrow from succ
                 key[i] = succ->key[0];
@@ -1346,7 +1555,7 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
                 // Delete the kv from succ
                 child_id[i+1] = node->traverse_delete(t, key[i], list);
 
-                if(t->cmb){
+                if(t->cmb && t->cmb->opt < 3){
                     *list = new removeList(t->cmb->get_block_id(node_id), *list);
                     t->cmb->update_node_id(node_id, t->get_free_block_id());
                 }
@@ -1363,8 +1572,14 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
                 int pred_id = node->get_pred(t);
                 BTreeNode<T>* pred = new BTreeNode<T>(0, 0, 0);  
                 t->node_read(pred_id, pred);
-                if(t->cmb && t->cmb->nodeLRU)
+                if(t->cmb && t->cmb->opt == 2)
                     t->cmb->reduction(pred_id, pred);
+                if(t->cmb && t->cmb->opt == 3){
+                    u_int64_t cmb_id = t->cmb->hbLRU->look_up(pred_id);
+                    if(cmb_id < t->cmb->hbLRU->max_num){
+                        t->cmb->hb_store(cmb_id, pred);
+                    } 
+                }
 
                 mylog << "borrow_from_predecesor() - node id:" << node->node_id << endl;
                 // Borrow from pred
@@ -1373,7 +1588,7 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
                 // Delete the kv form pred
                 child_id[i] = node->traverse_delete(t, key[i], list);
 
-                if(t->cmb){
+                if(t->cmb && t->cmb->opt < 3){
                     *list = new removeList(t->cmb->get_block_id(node_id), *list);
                     t->cmb->update_node_id(node_id, t->get_free_block_id());
                 }
@@ -1421,19 +1636,37 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
 template <typename T>
 u_int64_t BTreeNode<T>::direct_delete(BTree<T>* t, u_int64_t _k, removeList** list){
     mylog << "direct_delete() - key:" << _k << endl;
-    
-    if(t->cmb && t->cmb->nodeLRU && is_leaf){
-        u_int64_t iu_id = t->cmb->search_entry(node_id, _k, t, list);
-        if(iu_id != 0){
-            OPR_CODE last_opr = t->cmb->iu_get_opr(iu_id);
-            if(last_opr != D){
-                T empty;
-                t->cmb->append(t, node_id, D, _k, empty, list);
-                t->cmb->update_num_kv(node_id, t->cmb->get_num_kv(node_id) - 1);                
-            }
 
-            return node_id;
-        }        
+    if(is_leaf && t->cmb && t->cmb->opt == 3 && !hb_block){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            if(t->cmb->hb_read_num_key(cmb_id) <= min_num){
+                t->cmb->hbLRU->dequeue(node_id);
+                t->cmb->hb_store(cmb_id, this);
+            }
+            else{
+                t->cmb->hbLRU->reenqueue(cmb_id);
+                t->cmb->hb_delete(cmb_id, _k);
+                return node_id;
+            }
+        }
+        else{
+            if(num_key > min_num){
+                if(t->cmb->hbLRU->full()){
+                    u_int64_t cmb_id = t->cmb->hbLRU->pop();
+                    u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0);
+                    t->hb_force_merge(first_key, cmb_id);
+                    t->deletion(_k);
+                    return 0;
+                }
+                else{
+                    cmb_id = t->cmb->hbLRU->enqueue(node_id);
+                    t->cmb->hb_load(this, cmb_id);
+                    t->cmb->hb_delete(cmb_id, _k);
+                    return node_id;
+                }
+            }
+        }
     }
 
     int i, idx;
@@ -1448,7 +1681,7 @@ u_int64_t BTreeNode<T>::direct_delete(BTree<T>* t, u_int64_t _k, removeList** li
         return 0;
     } 
 
-    if(t->cmb && (i < num_key && t->cmb->nodeLRU && is_leaf)){
+    if(t->cmb && (i < num_key && t->cmb->opt == 2 && is_leaf)){
         T empty;
         t->cmb->append(t, node_id, D, _k, empty, list);
         t->cmb->update_num_kv(node_id, t->cmb->get_num_kv(node_id) - 1);
@@ -1464,7 +1697,7 @@ u_int64_t BTreeNode<T>::direct_delete(BTree<T>* t, u_int64_t _k, removeList** li
         }
         num_key--;
 
-        if(t->cmb){
+        if(t->cmb && t->cmb->opt < 3){
             *list = new removeList(t->cmb->get_block_id(node_id), *list);
             t->cmb->update_node_id(node_id, t->get_free_block_id());
             t->cmb->update_num_kv(node_id, num_key);
@@ -1486,10 +1719,25 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
     BTreeNode<T>* node = new BTreeNode<T>(0, 0, 0);
     t->node_read(child_id[idx], node);
 
-    if(t->cmb && t->cmb->nodeLRU && node->is_leaf){
+    if(t->cmb && t->cmb->opt == 2 && node->is_leaf){
         if(t->cmb->get_num_kv(child_id[idx]) >= min_num){
             delete node;
             return node_id;
+        }
+    }
+    else if(t->cmb && t->cmb->opt == 3 && node->is_leaf){
+        u_int64_t cmb_id = t->cmb->hbLRU->look_up(node->node_id);
+        if(cmb_id < t->cmb->hbLRU->max_num){
+            if(t->cmb->hb_read_num_key(node->node_id) >= min_num){
+                delete node;
+                return node_id; 
+            }
+        }
+        else{
+            if(node->num_key >= min_num){
+                delete node;
+                return node_id;
+            }
         }
     }
     else if(node->num_key >= min_num){
@@ -1501,15 +1749,31 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
     structural_change = 'T';
 
     BTreeNode<T>* left = new BTreeNode<T>(0, 0, 0);
-    if(idx - 1 >= 0)
+    if(idx - 1 >= 0){
         t->node_read(child_id[idx - 1], left);
+         
+        if(t->cmb && t->cmb->opt == 3 && left->is_leaf){
+            u_int64_t cmb_id = t->cmb->hbLRU->look_up(left->node_id);
+            if(cmb_id < t->cmb->hbLRU->max_num){
+                t->cmb->hb_store(cmb_id, left);      
+            }
+        }
+    }
     BTreeNode<T>* right = new BTreeNode<T>(0, 0, 0);
-    if(idx + 1 <= num_key)
+    if(idx + 1 <= num_key){
         t->node_read(child_id[idx + 1], right);
+
+        if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
+            u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+            if(cmb_id < t->cmb->hbLRU->max_num){
+                t->cmb->hb_store(cmb_id, right);      
+            }
+        }
+    }
     int trans_node_id;
 
     bool child_is_leaf = (idx - 1 >= 0) ? left->is_leaf : right->is_leaf;
-    if(t->cmb && t->cmb->nodeLRU && child_is_leaf){
+    if(t->cmb && t->cmb->opt == 2 && child_is_leaf){
         if(idx - 1 >= 0 && t->cmb->get_num_kv(left->node_id) > min_num){
             mylog << "borrow_from_left_sibling() - node id:" << child_id[idx] << endl;
             t->node_read(child_id[idx-1], left);   
@@ -1602,7 +1866,23 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
             mylog << "borrow_from_left_sibling() - node id:" << child_id[idx] << endl;
             //Borrowing from left
             t->node_read(child_id[idx-1], left);        
+            if(t->cmb && t->cmb->opt == 3 && left->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(left->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(left->node_id); 
+                    t->cmb->hb_store(cmb_id, left);      
+                }
+                hb_block = true;
+            }
             t->node_read(child_id[idx], right);
+            if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(right->node_id);
+                    t->cmb->hb_store(cmb_id, right);      
+                }
+                hb_block = true;
+            }
             trans_node_id = (left->is_leaf) ? 0 : left->child_id[left->num_key];
                 // Insert to right
             child_id[idx] = right->direct_insert(t, key[idx-1], value[idx-1], list, trans_node_id);
@@ -1612,7 +1892,7 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
                 // Delete from left
             child_id[idx-1] = left->direct_delete(t, key[idx-1], list);
 
-            if(t->cmb){
+            if(t->cmb && t->cmb->opt < 3){
                 *list = new removeList(t->cmb->get_block_id(node_id), *list);
                 t->cmb->update_node_id(node_id, t->get_free_block_id());
             }
@@ -1627,7 +1907,23 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
             mylog << "borrow_from_right_sibling() - node id:" << child_id[idx] << endl;
             //Borrowing from right
             t->node_read(child_id[idx], left);
+            if(t->cmb && t->cmb->opt == 3 && left->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(left->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(left->node_id); 
+                    t->cmb->hb_store(cmb_id, left);      
+                }
+                hb_block = true;
+            }
             t->node_read(child_id[idx+1], right);
+            if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(right->node_id);
+                    t->cmb->hb_store(cmb_id, right);      
+                }
+                hb_block = true;
+            }
             trans_node_id = (right->is_leaf) ? 0 : right->child_id[0];
                 // Insert to left
             child_id[idx] = left->direct_insert(t, key[idx], value[idx], list, 0, trans_node_id);
@@ -1637,7 +1933,7 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
                 // Delete from left
             child_id[idx+1] = right->direct_delete(t, key[idx], list);
             
-            if(t->cmb){
+            if(t->cmb && t->cmb->opt < 3){
                 *list = new removeList(t->cmb->get_block_id(node_id), *list);
                 t->cmb->update_node_id(node_id, t->get_free_block_id());
             }
@@ -1654,7 +1950,23 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
             //Merge with right unless idx = num_key
             if(idx == num_key) idx -= 1;
             t->node_read(child_id[idx], left);
+            if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(right->node_id);
+                    t->cmb->hb_store(cmb_id, right);      
+                }
+                hb_block = true;
+            }
             t->node_read(child_id[idx+1], right);
+            if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+                if(cmb_id < t->cmb->hbLRU->max_num){
+                    t->cmb->hbLRU->dequeue(right->node_id);
+                    t->cmb->hb_store(cmb_id, right);      
+                }
+                hb_block = true;
+            }
             trans_node_id = (right->is_leaf) ? 0 : right->child_id[0];
                 // Insert parent's kv to left
             left->key[left->num_key] = key[idx];
@@ -1671,7 +1983,7 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
                 left->num_key++;  
             }
                 // Store left node
-            if(t->cmb){
+            if(t->cmb && t->cmb->opt < 3){
                 *list = new removeList(t->cmb->get_block_id(left->node_id), *list);
                 t->cmb->update_node_id(left->node_id, t->get_free_block_id());
                 t->cmb->update_num_kv(left->node_id, left->num_key);
@@ -1685,7 +1997,7 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
             node_id = direct_delete(t, key[idx], list);
             child_id[idx] = left->node_id;
 
-            if(t->cmb){
+            if(t->cmb && t->cmb->opt < 3){
                 *list = new removeList(t->cmb->get_block_id(node_id), *list);
                 t->cmb->update_node_id(node_id, t->get_free_block_id());
             }
@@ -1696,7 +2008,7 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
 
             t->node_write(node_id, this);
 
-            if(t->cmb)
+            if(t->cmb && t->cmb->opt < 3)
                 *list = new removeList(t->cmb->get_block_id(right->node_id), *list);
             else
                 *list = new removeList(right->node_id, *list);
@@ -1737,6 +2049,68 @@ u_int64_t BTreeNode<T>::get_succ(BTree<T>* t){
         int ret = node->get_succ(t);
         delete node;
         return ret;
+    }
+}
+
+template <typename T>
+u_int64_t BTreeNode<T>::hb_force_merge(BTree<T> *t, u_int64_t _k, u_int64_t cmb_id, removeList** list){
+    mylog << "hb_force_merge() - key: " << _k << ", cmb_id: " << cmb_id << endl;
+
+    if(is_leaf){
+        t->cmb->hb_store(cmb_id, this);  
+        
+        *list = new removeList(node_id, *list);
+        node_id = t->get_free_block_id();
+        
+        t->node_write(node_id, this);
+  
+        return node_id;
+    }
+    else{
+        int i;
+        for(i = 0; i < num_key; i++){
+            if(_k < key[i]){
+                BTreeNode<T>* child = new BTreeNode<T>(0,0,0);
+                t->node_read(child_id[i], child);
+                int dup_child_id = child->hb_force_merge(t, _k, cmb_id, list);
+
+                if(dup_child_id == 0){
+                    delete child;
+                    return 0;
+                }
+
+                if(dup_child_id != child_id[i]){
+                    child_id[i] = dup_child_id;
+                    *list = new removeList(node_id , *list);
+                    node_id = t->get_free_block_id();
+                    t->node_write(node_id, this);
+                } 
+
+                delete child;
+
+                return node_id;
+            }
+        }
+
+        BTreeNode<T>* child = new BTreeNode<T>(0,0,0);
+        t->node_read(child_id[i], child);
+        int dup_child_id = child->hb_force_merge(t, _k, cmb_id, list);
+
+        if(dup_child_id == 0){
+            delete child;
+            return 0;
+        }
+
+        if(dup_child_id != child_id[i]){
+            child_id[i] = dup_child_id;
+            *list = new removeList(node_id , *list);
+            node_id = t->get_free_block_id();
+            t->node_write(node_id, this);
+        } 
+
+        delete child;
+
+        return node_id;
     }
 }
 
@@ -1801,6 +2175,9 @@ CMB<T>::~CMB(){
 
     if(nodeLRU)
         delete nodeLRU;
+
+    if(hbLRU)
+        delete hbLRU;
 }
 
 template <typename T>
@@ -2609,6 +2986,151 @@ void CMB<T>::iu_update_val_next(u_int64_t val_id, u_int64_t next){
     write(addr, &next, sizeof(u_int64_t)); 
 }
 
+template <typename T>
+void CMB<T>::hb_load(BTreeNode<T>* node, u_int64_t cmb_id){
+
+    for(int i = 0; i < node->num_key; i++){
+        hb_write_key(cmb_id, i, node->key[i]); 
+        hb_write_value(cmb_id, i, node->value[i]); 
+        if(i % 2 == 0)
+            usleep(1);
+    }
+    hb_write_num_key(cmb_id, node->num_key);
+}
+
+template <typename T>
+void CMB<T>::hb_store(u_int64_t cmb_id, BTreeNode<T>* node){
+
+    if(node->node_id != hbLRU->list_pool[cmb_id].NODE_ID){
+        cout << "   hb_store error: node ID unmatch" << endl;
+        mylog << "  hb_store error: node ID = " << node->node_id << ", node ID in LRU = " << hbLRU->list_pool[cmb_id].NODE_ID << endl;
+    }
+
+    node->num_key = hb_read_num_key(cmb_id);
+    for(int i = 0; i < node->num_key; i++){
+        node->key[i] = hb_read_key(cmb_id, i);
+        node->value[i] = hb_read_value(cmb_id, i);
+    }
+}
+
+template <typename T>
+u_int64_t CMB<T>::hb_kvp_search(u_int64_t cmb_id, u_int64_t _k){
+    
+    int idx;
+    int num_key = hb_read_num_key(cmb_id);
+    for(idx = 0; idx < num_key; idx++){
+        u_int64_t key = hb_read_key(cmb_id, idx);
+        if(_k <= key){
+            break;
+        }
+    } 
+    return idx;
+}
+
+template <typename T>
+void CMB<T>::hb_insert(u_int64_t cmb_id, u_int64_t _k, T _v){
+    
+    int idx = hb_kvp_search(cmb_id, _k);
+    int num_key = hb_read_num_key(cmb_id);
+    for(int i = num_key-1; i >= idx; i--){
+        u_int64_t last_key = hb_read_key(cmb_id, i);
+        T last_value = hb_read_value(cmb_id, i);
+        
+        hb_write_key(cmb_id, i+1, last_key);
+        hb_write_value(cmb_id, i+1, last_value);
+    }
+    
+    hb_write_key(cmb_id, idx, _k);
+    hb_write_value(cmb_id, idx, _v);
+
+    hb_write_num_key(cmb_id, num_key+1);
+}
+
+template <typename T>
+void CMB<T>::hb_update(u_int64_t cmb_id, u_int64_t _k, T _v){
+    
+    int idx = hb_kvp_search(cmb_id, _k);
+    hb_write_value(cmb_id, idx, _v);
+}
+
+template <typename T>
+T CMB<T>::hb_search(u_int64_t cmb_id, u_int64_t _k){
+    
+    int idx = hb_kvp_search(cmb_id, _k);
+    T ret = hb_read_value(cmb_id, idx);
+    return ret;
+}
+
+template <typename T>
+void CMB<T>::hb_delete(u_int64_t cmb_id, u_int64_t _k){
+    
+    int idx = hb_kvp_search(cmb_id, _k);
+    int num_key = hb_read_num_key(cmb_id);
+    for(int i = idx; i < num_key-1; i++){
+        u_int64_t next_key = hb_read_key(cmb_id, i+1);
+        T next_value = hb_read_value(cmb_id, i+1);
+        
+        hb_write_key(cmb_id, i, next_key);
+        hb_write_value(cmb_id, i, next_value);
+    }
+
+    hb_write_num_key(cmb_id, num_key-1);
+}
+
+template <typename T>
+void CMB<T>::hb_write_key(u_int64_t cmb_id, u_int64_t idx, u_int64_t _k){
+    
+    off_t addr = cmb_id * PAGE_SIZE + idx * (sizeof(u_int64_t)*2 + sizeof(T));
+     
+    write(addr, &_k, sizeof(u_int64_t)); 
+}
+
+template <typename T>
+u_int64_t CMB<T>::hb_read_key(u_int64_t cmb_id, u_int64_t idx){
+    
+    off_t addr = cmb_id * PAGE_SIZE + idx * (sizeof(u_int64_t)*2 + sizeof(T));
+     
+    u_int64_t ret;
+    read(&ret, addr, sizeof(u_int64_t)); 
+    return ret;
+}
+
+template <typename T>
+void CMB<T>::hb_write_value(u_int64_t cmb_id, u_int64_t idx, T _v){
+    
+    off_t addr = cmb_id * PAGE_SIZE + idx * (sizeof(u_int64_t)*2 + sizeof(T)) + sizeof(u_int64_t);
+     
+    write(addr, &_v, sizeof(T)); 
+}
+
+template <typename T>
+T CMB<T>::hb_read_value(u_int64_t cmb_id, u_int64_t idx){
+    
+    off_t addr = cmb_id * PAGE_SIZE + idx * (sizeof(u_int64_t)*2 + sizeof(T)) + sizeof(u_int64_t);
+     
+    T ret;
+    read(&ret, addr, sizeof(T)); 
+    return ret;
+}
+
+template <typename T>
+void CMB<T>::hb_write_num_key(u_int64_t cmb_id, u_int64_t num_key){
+    
+    off_t addr = cmb_id * PAGE_SIZE + 128 * (sizeof(u_int64_t)*2 + sizeof(T));
+     
+    write(addr, &num_key, sizeof(u_int64_t)); 
+}
+
+template <typename T>
+u_int64_t CMB<T>::hb_read_num_key(u_int64_t cmb_id){
+    
+    off_t addr = cmb_id * PAGE_SIZE + 128 * (sizeof(u_int64_t)*2 + sizeof(T));
+     
+    u_int64_t ret;
+    read(&ret, addr, sizeof(u_int64_t)); 
+    return ret;
+}
+
 node_LRU::node_LRU(){
     list_pool = (LRU_list_entry*) malloc((MAX_NUM_NODE+1) * sizeof(LRU_list_entry));
     head = 0;
@@ -2709,6 +3231,164 @@ u_int64_t node_LRU::pop(){
     }
 
     return ret;
+}
+
+HB_LRU::HB_LRU(int NUM){
+    max_num = NUM;
+    head = max_num;
+    tail = max_num;
+    used = 0;
+    list_pool = (HB_LRU_list_entry*) calloc(max_num, sizeof(HB_LRU_list_entry));
+    for(int i = 0; i < max_num; i++){
+        list_pool[i].last = max_num;
+        list_pool[i].next = max_num;
+        list_pool[i].used = 0;
+    }
+}
+
+HB_LRU::~HB_LRU(){
+    free(list_pool);
+}
+
+bool HB_LRU::full(){
+    if(used >= max_num)
+        return true;
+    else
+        return false;
+}
+
+u_int64_t HB_LRU::look_up(u_int64_t node_id){
+    u_int64_t cmb_idx = head;
+
+    while(cmb_idx < max_num){
+        if(list_pool[cmb_idx].NODE_ID == node_id){
+            return cmb_idx;            
+        }
+        cmb_idx = list_pool[cmb_idx].next;
+    }
+    return max_num;
+}
+
+void HB_LRU::reenqueue(u_int64_t cmb_idx){
+    mylog << "HB_LRU::reenqueue(cmb_id = " << cmb_idx << ")" << endl;
+
+    if(tail == cmb_idx)
+        return;
+
+    if(head == cmb_idx){
+        head = list_pool[cmb_idx].next;
+        list_pool[head].last = max_num;        
+    }
+    else{
+        u_int64_t last_entry, next_entry;
+        last_entry = list_pool[cmb_idx].last;
+        next_entry = list_pool[cmb_idx].next;
+
+        list_pool[last_entry].next = next_entry;
+        list_pool[next_entry].last = last_entry;
+    }
+
+    list_pool[tail].next = cmb_idx;
+    list_pool[cmb_idx].last = tail;
+    list_pool[cmb_idx].next = max_num;
+    tail = cmb_idx;
+}
+
+u_int64_t HB_LRU::pop(){
+    if(head == max_num && tail == max_num)
+        return max_num;
+
+    u_int64_t ret = head;
+    if(head == tail){
+        head = max_num;
+        tail = max_num;
+    }
+    else{
+        head = list_pool[head].next;
+        list_pool[head].last = max_num;
+    }
+
+    list_pool[ret].last = max_num;
+    list_pool[ret].next = max_num;
+    list_pool[ret].used = 0;
+
+    used--;
+
+    mylog << "HB_LRU::pop() : cmb_id = " << ret << endl;
+
+    return ret;
+}
+
+u_int64_t HB_LRU::enqueue(u_int64_t node_id){
+    u_int64_t idx;
+    for(idx = 0; idx < max_num; idx++){
+        if(list_pool[idx].used == 0)
+            break;
+    }
+    if(idx >= max_num)
+        return max_num;
+
+    if(head == max_num && tail == max_num){
+        head = idx;
+        tail = idx;
+        list_pool[idx].last = max_num;
+        list_pool[idx].next = max_num;
+    }
+    else{
+        list_pool[tail].next = idx;
+        list_pool[idx].last = tail;
+        list_pool[idx].next = max_num;
+        tail = idx;
+    }
+    list_pool[idx].NODE_ID = node_id;
+    list_pool[idx].used = 1;
+
+    used++;
+
+    mylog << "HB_LRU::enqueue(node_id = " << node_id << "): cmb_id = " << idx << endl;
+    
+    return idx;
+}
+
+u_int64_t HB_LRU::dequeue(u_int64_t node_id){
+
+    u_int64_t idx = tail;
+    while(idx < max_num){
+        if(list_pool[idx].NODE_ID == node_id)
+            break;
+        idx = list_pool[idx].last;
+    }
+    if(idx >= max_num)
+        return max_num;
+    
+    if(head == idx && tail == idx){
+        head = max_num;
+        tail = max_num;
+    }
+    else if(head == idx){
+        head = list_pool[idx].next;
+        list_pool[head].last = max_num;
+    }
+    else if(tail == idx){
+        tail = list_pool[idx].last;
+        list_pool[tail].next = max_num;
+    }
+    else{
+        u_int64_t last_entry, next_entry;
+        last_entry = list_pool[idx].last;
+        next_entry = list_pool[idx].next;
+        list_pool[last_entry].next = next_entry;
+        list_pool[next_entry].last = last_entry; 
+    }
+    list_pool[idx].used = 0;
+    list_pool[idx].last = max_num;
+    list_pool[idx].next = max_num;
+
+    used--;
+
+    mylog << "HB_LRU::dequeue(node_id = " << node_id << "): cmb_id=" << idx << endl;
+
+    return idx;
 }
 
 #endif /* B_TREE_H */

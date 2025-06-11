@@ -37,9 +37,10 @@ int main(int argc, char** argv){
     int start = 0;
     int end = 0;
     MODE mode = COPY_ON_WRITE;
-    bool writeSize = false;
     int append = 0;
     int read_threshold = 40;
+    bool LRU = true;
+    int HB = 0;
 
     if(argc < 2){
         usage();
@@ -78,8 +79,12 @@ int main(int argc, char** argv){
                 read_threshold = atoi(argv[i+1]);
                 i++;
             }
-            else if(strcmp(argv[i], "-writesize") == 0){
-                writeSize = true;
+            else if(strcmp(argv[i], "-MRU") == 0){
+                LRU = false;
+            }
+            else if(strcmp(argv[i], "-hb") == 0){
+                HB = stoi(argv[i+1]);
+                i++;
             }
             else{
                 tree_file = argv[i];
@@ -93,6 +98,12 @@ int main(int argc, char** argv){
         }
     }
 
+    if(input_file == NULL){
+        cout << "   Error: Input File Absent" << endl;
+        cout << "   Please check the -input " << endl;
+        exit(1);
+    }
+
     if(log_file == NULL)
         mylog.open("/dev/null");
     else
@@ -100,7 +111,7 @@ int main(int argc, char** argv){
 
     cout << "Create tree <" << tree_file << ">" << endl;
     mylog << "Create tree <" << tree_file << ">" << endl;
-    t = new BTree<TYPE>(tree_file, degree, mode, append, read_threshold);
+    t = new BTree<TYPE>(tree_file, degree, mode, append, read_threshold, LRU, HB);
 
     t->stat();
 
