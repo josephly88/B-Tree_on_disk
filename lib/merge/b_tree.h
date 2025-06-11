@@ -1215,7 +1215,7 @@ u_int64_t BTreeNode<T>::update(BTree<T>* t, u_int64_t _k, T _v, removeList** lis
             else{
                 value[i] = _v;
 
-                if(t->cmb && !t->cmb->opt == 3){
+                if(t->cmb && t->cmb->opt < 3){
                     *list = new removeList(t->cmb->get_block_id(node_id), *list);
                     t->cmb->update_node_id(node_id, t->get_free_block_id());
                 }
@@ -2992,8 +2992,7 @@ void CMB<T>::hb_load(BTreeNode<T>* node, u_int64_t cmb_id){
     for(int i = 0; i < node->num_key; i++){
         hb_write_key(cmb_id, i, node->key[i]); 
         hb_write_value(cmb_id, i, node->value[i]); 
-        if(i % 2 == 0)
-            usleep(1);
+        usleep(1);
     }
     hb_write_num_key(cmb_id, node->num_key);
 }
@@ -3038,6 +3037,7 @@ void CMB<T>::hb_insert(u_int64_t cmb_id, u_int64_t _k, T _v){
         
         hb_write_key(cmb_id, i+1, last_key);
         hb_write_value(cmb_id, i+1, last_value);
+        usleep(1);
     }
     
     hb_write_key(cmb_id, idx, _k);
@@ -3072,6 +3072,7 @@ void CMB<T>::hb_delete(u_int64_t cmb_id, u_int64_t _k){
         
         hb_write_key(cmb_id, i, next_key);
         hb_write_value(cmb_id, i, next_value);
+        usleep(1);
     }
 
     hb_write_num_key(cmb_id, num_key-1);
