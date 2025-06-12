@@ -3015,6 +3015,7 @@ void CMB<T>::hb_store(u_int64_t cmb_id, BTreeNode<T>* node){
     if(node->node_id != hbLRU->list_pool[cmb_id].NODE_ID){
         cout << "   hb_store error: node ID unmatch" << endl;
         mylog << "  hb_store error: node ID = " << node->node_id << ", node ID in LRU = " << hbLRU->list_pool[cmb_id].NODE_ID << endl;
+        exit(1);
     }
 
     node->num_key = hb_read_num_key(cmb_id);
