@@ -2,7 +2,8 @@
 
 #ARG=""
 #ARG="-cmb"
-ARG="-cmb -append 40000 -thres 40"
+#ARG="-cmb -append 40000 -MRU -thres 1"
+ARG="-cmb -hb 256"
 
 [ -d "email" ] && rm email
 
