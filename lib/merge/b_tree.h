@@ -1525,8 +1525,9 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
             else if(t->cmb && t->cmb->opt == 3){
                 u_int64_t cmb_id = t->cmb->hbLRU->look_up(succ_id);
                 if(cmb_id < t->cmb->hbLRU->max_num){
-                    if(t->cmb->hb_read_num_key(cmb_id) > min_num)
+                    if(t->cmb->hb_read_num_key(cmb_id) > min_num){
                         borrow_from_succ = true;
+                    }
                 }
                 else{
                     if(succ->num_key > min_num)
@@ -1545,10 +1546,15 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
                 if(t->cmb && t->cmb->opt == 3){
                     u_int64_t cmb_id = t->cmb->hbLRU->look_up(succ_id);
                     if(cmb_id < t->cmb->hbLRU->max_num){
-                        t->cmb->hb_store(cmb_id, succ);
+                        t->cmb->hbLRU->dequeue(succ_id);
+                        u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0); 
+                        t->hb_force_merge(first_key, cmb_id);
+                        t->deletion(_k);
+                        return 0;
                     } 
                 }
-
+                
+                hb_block = true;                 
                 // Borrow from succ
                 key[i] = succ->key[0];
                 value[i] = succ->value[0];
@@ -1577,11 +1583,17 @@ u_int64_t BTreeNode<T>::traverse_delete(BTree<T> *t, u_int64_t _k, removeList** 
                 if(t->cmb && t->cmb->opt == 3){
                     u_int64_t cmb_id = t->cmb->hbLRU->look_up(pred_id);
                     if(cmb_id < t->cmb->hbLRU->max_num){
-                        t->cmb->hb_store(cmb_id, pred);
+                        t->cmb->hbLRU->dequeue(pred_id);
+                        u_int64_t first_key = t->cmb->hb_read_key(cmb_id, 0); 
+                        t->hb_force_merge(first_key, cmb_id);
+                        t->deletion(_k);
+                        return 0;
                     } 
                 }
 
                 mylog << "borrow_from_predecesor() - node id:" << node->node_id << endl;
+
+                hb_block = true;
                 // Borrow from pred
                 key[i] = pred->key[pred->num_key - 1];
                 value[i] = pred->value[pred->num_key - 1];
@@ -1950,11 +1962,11 @@ u_int64_t BTreeNode<T>::rebalance(BTree<T>* t, int idx, removeList** list){
             //Merge with right unless idx = num_key
             if(idx == num_key) idx -= 1;
             t->node_read(child_id[idx], left);
-            if(t->cmb && t->cmb->opt == 3 && right->is_leaf){
-                u_int64_t cmb_id = t->cmb->hbLRU->look_up(right->node_id);
+            if(t->cmb && t->cmb->opt == 3 && left->is_leaf){
+                u_int64_t cmb_id = t->cmb->hbLRU->look_up(left->node_id);
                 if(cmb_id < t->cmb->hbLRU->max_num){
-                    t->cmb->hbLRU->dequeue(right->node_id);
-                    t->cmb->hb_store(cmb_id, right);      
+                    t->cmb->hbLRU->dequeue(left->node_id);
+                    t->cmb->hb_store(cmb_id, left);      
                 }
                 hb_block = true;
             }
